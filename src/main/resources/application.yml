@@ -1,0 +1,15 @@
+spring.application.name: Ecommerce-service
+
+spring:
+  jpa:
+    show-sql: true
+  config:
+    activate:
+      on-profile: development
+  datasource:
+    name: ecommercedb
+server:
+  port: 9292
+
+
+
