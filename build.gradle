@@ -1,0 +1,201 @@
+buildscript {
+    ext {
+
+        springBootVersion = '2.7.14'
+    }
+    repositories {
+        mavenCentral()
+    }
+    dependencies {
+        classpath "org.springframework.boot:spring-boot-gradle-plugin:${springBootVersion}",
+                "info.solidsoft.gradle.pitest:gradle-pitest-plugin:1.5.1"
+    }
+}
+
+plugins {
+    id "com.jfrog.artifactory" version "4.16.0"
+    id "org.sonarqube" version "3.2.0"
+    id "com.github.hierynomus.license" version "0.16.1"
+}
+
+
+apply plugin: 'groovy'
+apply plugin: 'java-library'
+apply plugin: 'org.springframework.boot'
+apply plugin: 'io.spring.dependency-management'
+apply plugin: 'jacoco'
+apply plugin: 'com.jfrog.artifactory'
+apply plugin: 'maven-publish'
+apply plugin: 'project-report'
+apply plugin: 'info.solidsoft.pitest'
+
+sourceCompatibility = JavaVersion.VERSION_17
+targetCompatibility = JavaVersion.VERSION_17
+
+
+
+version "${version}"
+
+depVersion = "${depVersion}"
+
+group 'com.chartercommunications.ecommerceservice'
+springBoot {
+    mainClass = 'com.chartercommunications.ecommerceservice.EcommerceServiceApplication'
+    buildInfo()
+}
+artifactory {
+    publish {
+        repository {
+            if (version.contains('snapshot') || version.contains('SNAPSHOT'))
+                repoKey = 'libs-snapshot-local'
+            else
+                repoKey = 'libs-release-local'
+            username = "${artifactoryUsername}"
+            password = "${artifactoryPassword}"
+        }
+        defaults {
+            publishArtifacts = true
+            publications('mavenJava')
+        }
+    }
+}
+publishing {
+    publications {
+        mavenJava(MavenPublication) {
+            from components.java
+        }
+    }
+}
+
+
+configurations {
+    runtime.exclude group: "org.codehaus.groovy", module: "groovy-testng"
+
+    all {
+        resolutionStrategy {
+            eachDependency {
+                drd ->
+                    if (drd.requested.group == 'org.springframework.kafka') {
+                        drd.useVersion '2.9.11'
+                    }
+                    if (drd.requested.group == 'org.apache.kafka') {
+                        drd.useVersion '3.5.1'
+                    }
+            }
+            cacheChangingModulesFor 0, 'seconds'
+        }
+    }
+    zip
+}
+
+repositories {
+    maven { url 'https://maven.repository.redhat.com/ga/'}
+}
+
+
+dependencies {
+    def excludeGroovyAll = { exclude group: 'org.codehaus.groovy'}
+    implementation localGroovy()
+    implementation group: 'jakarta.persistence', name: 'jakarta.persistence-api', version: '3.1.0'
+    implementation group: 'org.springframework.boot', name: 'spring-boot-starter-data-jpa', version: '3.1.4'
+    api 'org.springframework.data:spring-data-commons'
+    api 'org.springframework.boot:spring-boot-starter-web'
+    api 'org.springframework.boot:spring-boot-starter-actuator'
+    runtimeOnly group: 'org.springframework.boot', name: 'spring-boot-starter-actuator'
+    runtimeOnly group: 'org.mariadb.jdbc', name: 'mariadb-java-client', version: '2.7.3'
+    runtimeOnly group: 'net.bytebuddy', name: 'byte-buddy', version: '1.14.2'
+    testImplementation group: 'org.mockito', name: 'mockito-core', version: '3.11.2'
+    testImplementation 'org.springframework.boot:spring-boot-starter-test'
+    testImplementation group: 'junit', name: 'junit', version: '4.13.2'
+    // mandatory dependencies for using Spock
+    testImplementation group: 'org.spockframework', name: 'spock-core', version: '2.0-M5-groovy-3.0', excludeGroovyAll
+    // optional dependencies for using Spock
+    testRuntimeOnly 'net.bytebuddy:byte-buddy:1.14.2'         // allows mocking of classes (in addition to interfaces)
+    testImplementation group: 'org.spockframework', name: 'spock-junit4', version: '2.0-M5-groovy-3.0'
+    testImplementation group: 'org.spockframework', name: 'spock-spring', version: '2.0-M5-groovy-3.0', excludeGroovyAll
+}
+
+jacocoTestReport {
+    group = "Reporting"
+    reports {
+        xml.enabled true
+        html.enabled true
+        csv.enabled false
+        html.destination file("${buildDir}/reports/coverage")
+    }
+}
+
+
+
+repositories {
+    mavenCentral()
+}
+
+task unzip {
+    doLast {
+        println "Dependencies:"
+        configurations.zip.each {
+            println it
+            def zipFile = file(it)
+            def outputDir = file("${buildDir}")
+            copy {
+                from zipTree(zipFile)
+                into outputDir
+            }
+        }
+    }
+}
+
+task classpathJar(type: Jar) {
+    inputs.files sourceSets.test.runtimeClasspath
+
+    archiveName = "runboot-classpath.jar"
+    doFirst {
+        // If run in configuration phase, some artifacts may not exist yet (after clean)
+        // and File.toURI can’t figure out what is directory to add the critical trailing slash.
+        manifest {
+            def classpath = sourceSets.test.runtimeClasspath.files
+            attributes "Class-Path": classpath.collect { f -> f.toURI().toString() }.join(" ")
+        }
+    }
+}
+
+bootRun {
+    classpath = classpathJar.outputs.files
+    systemProperties = System.properties
+    systemProperty 'spring.profiles.active', 'development'
+    jvmArgs('-Djava.util.logging.config.file=none', '--illegal-access=warn')
+}
+
+
+test {
+    useJUnitPlatform()
+    systemProperties = System.properties
+    systemProperty 'spring.profiles.active', 'development'
+    jvmArgs('-Djava.util.logging.config.file=none', '--illegal-access=warn')
+}
+
+pitest {
+    threads = 4
+    outputFormats = ['XML', 'HTML']
+    useClasspathFile = true
+    timestampedReports = false
+}
+
+license {
+    ext.year = Calendar.getInstance().get(Calendar.YEAR)
+    includes(["**/*.java", "**/*.groovy"])
+}
+classes.dependsOn(licenseFormat)
+
+bootJar.dependsOn unzip
+jar.enabled = true
+
+def jdk17CompatArgs = ['--add-exports=java.base/jdk.internal.misc=ALL-UNNAMED', '--add-exports=java.base/sun.nio.ch=ALL-UNNAMED', '--add-exports=java.management/com.sun.jmx.mbeanserver=ALL-UNNAMED', '--add-exports=jdk.internal.jvmstat/sun.jvmstat.monitor=ALL-UNNAMED', '--add-exports=java.base/sun.reflect.generics.reflectiveObjects=ALL-UNNAMED', '--add-opens=jdk.management/com.sun.management.internal=ALL-UNNAMED', '--add-opens=java.base/java.nio=ALL-UNNAMED', '--add-opens=java.base/java.util=ALL-UNNAMED', '--add-opens=java.base/java.lang=ALL-UNNAMED', '--add-opens=java.base/java.lang.reflect=ALL-UNNAMED']
+allprojects.forEach(p -> {
+    p.tasks.forEach(task -> {
+        if (task.metaClass.respondsTo(task, 'jvmArgs', Iterable<String>)) {
+            task.jvmArgs(jdk17CompatArgs)
+        }
+    })
+})
